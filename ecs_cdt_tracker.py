@@ -408,9 +408,18 @@ def send_feishu_text(webhook_url, message, signing_secret=""):
 
     if not isinstance(result, dict):
         raise RuntimeError("飞书 Webhook 返回格式无效。")
-    code = result.get("code", result.get("StatusCode", 0))
-    if str(code) not in ("0", "None"):
-        raise RuntimeError(f"飞书 Webhook 拒绝消息: {result.get('msg', result.get('StatusMessage', code))}")
+    code = result.get("code")
+    if code is None:
+        code = result.get("StatusCode")
+    if code is None:
+        raise RuntimeError("飞书 Webhook 响应缺少 code/StatusCode，无法确认消息已被接收。")
+
+    response_message = result.get("msg") or result.get("StatusMessage")
+    if str(code) != "0":
+        raise RuntimeError(f"飞书 Webhook 拒绝消息：{response_message or code}（code={code}）")
+
+    message = str(response_message).strip() if response_message else ""
+    return f"code={code}" + (f", msg={message}" if message else "")
 
 
 def split_message(message, max_chars=MAX_FEISHU_TEXT_CHARS):
@@ -532,13 +541,18 @@ def send_daily_report(logger, log_path):
     report = summarize_daily_log(log_content, now.strftime("%Y-%m-%d"))
     chunks = split_message(report)
     secret = os.environ.get("FEISHU_WEBHOOK_SECRET", "").strip()
+    acknowledgements = []
     for index, chunk in enumerate(chunks, start=1):
         if len(chunks) > 1:
             chunk = f"[第 {index}/{len(chunks)} 部分]\n{chunk}"
-        send_feishu_text(webhook_url, chunk, secret)
+        acknowledgements.append(send_feishu_text(webhook_url, chunk, secret))
 
     sent_marker.write_text(f"sent_at={now.isoformat()}\n", encoding="utf-8")
-    logger.info("飞书日报简报发送成功，共 %d 条消息。", len(chunks))
+    logger.info(
+        "飞书 Webhook 已确认接收简报，共 %d 条；响应：%s",
+        len(chunks),
+        "；".join(acknowledgements),
+    )
     return 0
 
 

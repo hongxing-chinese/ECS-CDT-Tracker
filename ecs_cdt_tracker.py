@@ -3,6 +3,7 @@
 
 import argparse
 import base64
+from collections import Counter
 import hashlib
 import hmac
 import json
@@ -418,6 +419,82 @@ def split_message(message, max_chars=MAX_FEISHU_TEXT_CHARS):
     return [message[index:index + max_chars] for index in range(0, len(message), max_chars)]
 
 
+def summarize_daily_log(log_content, report_date):
+    lines = log_content.splitlines()
+    run_count = sum("开始本轮检查，共配置 " in line for line in lines)
+    completed_runs = []
+    action_counts = Counter()
+    instance_failures = Counter()
+    task_errors = Counter()
+
+    for line in lines:
+        completed = re.search(r"本轮检查结束：实例 (\d+) 台，失败 (\d+) 台。", line)
+        if completed:
+            completed_runs.append((int(completed.group(1)), int(completed.group(2))))
+
+        action = re.search(r"实例 (\S+) 已提交(启动|停止|重启)请求。", line)
+        if action:
+            action_counts[action.group(2)] += 1
+
+        instance_failure = re.search(r"检查实例 (\S+) \(([^)]+)\) 失败。", line)
+        if instance_failure:
+            instance_failures[(instance_failure.group(1), instance_failure.group(2))] += 1
+
+        task_error = re.search(r"任务执行失败: (.+)$", line)
+        if task_error:
+            task_errors[task_error.group(1).strip()] += 1
+
+    checked_instances = sum(total for total, _ in completed_runs)
+    failed_instances = sum(failed for _, failed in completed_runs)
+    task_error_count = sum(task_errors.values())
+    incomplete_runs = max(0, run_count - len(completed_runs))
+    has_activity = run_count or completed_runs or instance_failures or task_errors
+
+    if not has_activity:
+        return f"ECS-CDT-Tracker 每日简报（北京时间 {report_date}）\n今日暂无保活检查记录。"
+
+    status = (
+        "运行正常"
+        if failed_instances == 0 and not instance_failures and not task_error_count and incomplete_runs == 0
+        else "存在异常"
+    )
+    summary_lines = [
+        f"ECS-CDT-Tracker 每日简报（北京时间 {report_date}）",
+        f"检查：启动 {run_count} 轮，完成 {len(completed_runs)} 轮；实例检查 {checked_instances} 次。",
+        f"异常：实例失败 {failed_instances} 次，任务错误 {task_error_count} 次，未完成 {incomplete_runs} 轮。",
+        "已提交请求：启动 {start} 次，停止 {stop} 次，重启 {reboot} 次。".format(
+            start=action_counts["启动"],
+            stop=action_counts["停止"],
+            reboot=action_counts["重启"],
+        ),
+        f"状态：{status}",
+    ]
+
+    if instance_failures:
+        details = [
+            f"{instance_id}（{region}）×{count}"
+            for (instance_id, region), count in instance_failures.most_common(3)
+        ]
+        remaining = len(instance_failures) - len(details)
+        detail_text = "；".join(details)
+        if remaining > 0:
+            detail_text += f"；另有 {remaining} 台"
+        summary_lines.append(f"实例异常：{detail_text}")
+
+    if task_errors:
+        details = []
+        for message, count in task_errors.most_common(3):
+            compact_message = message[:120] + ("…" if len(message) > 120 else "")
+            details.append(f"{compact_message}（{count} 次）")
+        remaining = len(task_errors) - len(details)
+        detail_text = "；".join(details)
+        if remaining > 0:
+            detail_text += f"；另有 {remaining} 类错误"
+        summary_lines.append(f"任务错误：{detail_text}")
+
+    return "\n".join(summary_lines)
+
+
 def send_daily_report(logger, log_path):
     now = beijing_now()
     report_time = os.environ.get("FEISHU_REPORT_TIME", "17:00").strip()
@@ -436,7 +513,7 @@ def send_daily_report(logger, log_path):
 
     webhook_url = os.environ.get("FEISHU_WEBHOOK_URL", "").strip()
     if not webhook_url:
-        logger.error("未配置 FEISHU_WEBHOOK_URL，无法发送每日保活日志。")
+        logger.error("未配置 FEISHU_WEBHOOK_URL，无法发送每日简报。")
         return 1
 
     state_dir = configured_path("ECS_CDT_TRACKER_STATE_DIR", ROOT_DIR / "state")
@@ -446,15 +523,13 @@ def send_daily_report(logger, log_path):
         logger.info("今日 %s 日报已发送，跳过重复通知。", report_time)
         return 0
 
-    logger.info("开始发送北京时间 %s 的每日保活日志。", f"{now:%Y-%m-%d} {report_time}")
+    logger.info("开始发送北京时间 %s 的每日简报。", f"{now:%Y-%m-%d} {report_time}")
     if log_path.exists():
         log_content = log_path.read_text(encoding="utf-8").strip()
     else:
-        log_content = "今天尚无保活运行日志。"
-    if not log_content:
-        log_content = "今天尚无保活运行日志。"
+        log_content = ""
 
-    report = f"ECS-CDT-Tracker 阿里云 CDT / ECS 日志（北京时间 {now:%Y-%m-%d} {report_time}）\n\n{log_content}"
+    report = summarize_daily_log(log_content, now.strftime("%Y-%m-%d"))
     chunks = split_message(report)
     secret = os.environ.get("FEISHU_WEBHOOK_SECRET", "").strip()
     for index, chunk in enumerate(chunks, start=1):
@@ -463,7 +538,7 @@ def send_daily_report(logger, log_path):
         send_feishu_text(webhook_url, chunk, secret)
 
     sent_marker.write_text(f"sent_at={now.isoformat()}\n", encoding="utf-8")
-    logger.info("飞书日报发送成功，共 %d 条消息。", len(chunks))
+    logger.info("飞书日报简报发送成功，共 %d 条消息。", len(chunks))
     return 0
 
 

@@ -9,6 +9,7 @@ ECS-CDT-Tracker 是一段自动化的 Python 脚本，根据阿里云 CDT 流量
 - 达到或超过阈值时停止运行中或启动中的实例；低于阈值时启动已停止实例，对其他异常状态提交重启请求。
 - cron 按可编辑的计划执行 ECS 检查；默认每 10 分钟一次。
 - 日报任务每分钟检查一次，脚本按 `FEISHU_REPORT_TIME` 指定的时间发送（默认 17:00）。
+- 飞书日报只发送检查次数、实例异常和启停操作的简报；完整日志保留在本地。
 - 日志按北京时间写入 `logs/ecs-cdt-tracker-YYYY-MM-DD.log`；日报使用 `state/` 中的日期标记防止重复发送。
 - 支持飞书自定义机器人签名密钥。
 
@@ -94,7 +95,7 @@ python ecs_cdt_tracker.py run
 python ecs_cdt_tracker.py report
 ```
 
-`run.log` 保存 cron 命令输出；`logs/ecs-cdt-tracker-YYYY-MM-DD.log` 保存按北京时间整理的运行日志，也是飞书日报的内容来源。`state/` 保存日报发送标记。
+`run.log` 保存 cron 命令输出；`logs/ecs-cdt-tracker-YYYY-MM-DD.log` 保存按北京时间整理的完整运行日志，飞书日报会从中提取简报。`state/` 保存日报发送标记。
 
 ```bash
 tail -f /home/ECS-CDT-Tracker/run.log

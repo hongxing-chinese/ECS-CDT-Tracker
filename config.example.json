@@ -1,0 +1,14 @@
+{
+  "instances": [
+    {
+      "region": "cn-hongkong",
+      "id": "i-xxxxxxxxxxxxxxxxx",
+      "threshold_gb": 200
+    },
+    {
+      "region": "cn-shenzhen",
+      "id": "i-yyyyyyyyyyyyyyyyy",
+      "threshold_gb": 20
+    }
+  ]
+}
